@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package>
+    <name>disp_map</name>
+    <version>0.0.1</version>
+    <description>This package is used to build disparity map from a simple stereopair of images</description>
+    <maintainer email="ed.zhavoronkov@gmail.com">Edgar Zhavoronkov</maintainer>
+    <license>TODO</license>
+    <url type="website">https://github.com/edgarzhavoronkov/practice</url>
+    <author email="ed.zhavoronkov@gmail.com">Edgar Zhavoronkov</author>
+
+    <build_depend>roscpp</build_depend>
+    <build_depend>opencv3</build_depend>
+    <run_depend>roscpp</run_depend>
+    <run_depend>opencv3</run_depend>
+    <buildtool_depend>catkin</buildtool_depend>
+</package>

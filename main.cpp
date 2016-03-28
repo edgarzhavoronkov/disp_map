@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <ros/ros.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -8,6 +9,8 @@ using namespace cv;
 
 int main(int argc, char** argv )
 {
+    ros::init(argc, argv, "disp_map");
+    ros::NodeHandle nh;
     if ( argc != 3 )
     {
         printf("usage: DispMap <LeftImagePath> <RightImagePath>\n");
