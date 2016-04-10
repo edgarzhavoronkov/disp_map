@@ -1,0 +1,7 @@
+<launch>
+    <arg name="dataset" default="/media/edgar/My\ Drive/2012-01-25-12-14-25.bag" />
+    <arg name="rate" default="1.0" />
+
+    <node name="DispMapNode" pkg="disp_map" type="main" cwd="node" required="true" output="screen" />
+    <node name="player" pkg="rosbag" type="play" args="--clock --rate $(arg rate) $(arg dataset)" />
+</launch>
