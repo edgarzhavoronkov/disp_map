@@ -1,8 +1,13 @@
 #include <stdio.h>
+#include <cmath>
+#include <vector>
 
 #include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
 #include <sensor_msgs/Image.h>
 
 #include <opencv2/core/core.hpp>
@@ -10,98 +15,81 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
+cv::StereoSGBM sgbm;
 
-cv::Mat leftImage;
-cv::Mat rightImage;
-cv::Mat depthMap;
+std::vector<double> xs;
 
-const int MSG_COUNT = 33152;
-
-void handleLeftPicReceived(const sensor_msgs::ImageConstPtr& msg)
+void callback(const sensor_msgs::ImageConstPtr& left
+    , const sensor_msgs::ImageConstPtr& right
+    , const sensor_msgs::ImageConstPtr& depth)
 {
     printf("Caught left image\n");
-    cv_bridge::CvImagePtr cv_ptr;
-    try
-    {
-        cv_ptr = cv_bridge::toCvCopy(msg);
-        leftImage = cv_ptr->image;
-        printf("Converted left image to CV image!\n");
-    }
-    catch (cv_bridge::Exception& e)
-    {
-        ROS_ERROR("cv_bridge exception: %s\n", e.what());
-        return;
-    }
-}
-
-void handleRightPicReceived(const sensor_msgs::ImageConstPtr& msg)
-{
     printf("Caught right image \n");
-    cv_bridge::CvImageConstPtr cv_ptr;
-    try
-    {
-        cv_ptr = cv_bridge::toCvCopy(msg);
-        rightImage = cv_ptr->image;
-        printf("Converted right image to CV image!\n");
-    }
-    catch (cv_bridge::Exception& e)
-    {
-        ROS_ERROR("cv_bridge exception: %s\n", e.what());
-        return;
-    }
-}
-
-void handleEtalonPicReceived(const sensor_msgs::ImageConstPtr& msg)
-{
     printf("Caught depth map\n");
-    cv_bridge::CvImageConstPtr cv_ptr;
-    try
-    {
-        cv_ptr = cv_bridge::toCvCopy(msg);
-        depthMap = cv_ptr->image;
-        printf("Converted etalon image to CV image!\n");
-    }
-    catch (cv_bridge::Exception& e)
-    {
-        ROS_ERROR("cv_bridge exception: %s\n", e.what());
-        return;
-    }
-}
 
+    cv::Mat leftImage = cv_bridge::toCvShare(left, sensor_msgs::image_encodings::BGR8)->image;
+    cv::Mat rightImage = cv_bridge::toCvShare(right, sensor_msgs::image_encodings::BGR8)->image;
+    cv::Mat depthImage = cv_bridge::toCvShare(depth)->image;
+    cv::Mat greyLeftImage, greyRightImage;
+    cv::Mat disp, disp8;
+
+    cv::cvtColor(leftImage, greyLeftImage, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(rightImage, greyRightImage, cv::COLOR_BGR2GRAY);
+
+    sgbm(greyLeftImage, greyRightImage, disp);
+    cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_8U);
+    printf("Computed disp_map\n\n");
+
+    cv::Mat diff = disp8 - depthImage;
+    printf("Difference is %f\n", cv::sum(diff)[0]);
+    xs.push_back(cv::sum(diff)[0]);
+}
 
 int main(int argc, char** argv )
 {
     ros::init(argc, argv, "disp_map");
     ros::NodeHandle nh;
 
-    //subscribe and get images from publisher
-    image_transport::ImageTransport it(nh);
-    image_transport::Subscriber lPicSubscriber = it.subscribe("/wide_stereo/left/image_raw", 1000, handleLeftPicReceived);
-    image_transport::Subscriber rPicSubscriber = it.subscribe("/wide_stereo/right/image_raw", 1000, handleRightPicReceived);
-    image_transport::Subscriber etalonPicSubsriber = it.subscribe("/camera/depth/image_raw", 1000, handleEtalonPicReceived);
+    message_filters::Subscriber<sensor_msgs::Image> leftImageSub(nh, "/wide_stereo/left/image_raw", 1);
+    message_filters::Subscriber<sensor_msgs::Image> rightImageSub(nh, "/wide_stereo/right/image_raw", 1);
+    message_filters::Subscriber<sensor_msgs::Image> depthMapSub(nh, "/camera/depth/image_raw", 1);
 
-    cv::Mat greyLeftImage;
-    cv::Mat greyRightImage;
-    cv::Mat disp, disp8;
 
-    if (leftImage.data && rightImage.data)
-    {
-        cv::cvtColor(leftImage, greyLeftImage, cv::COLOR_BGR2GRAY);
-        cv::cvtColor(rightImage, greyRightImage, cv::COLOR_BGR2GRAY);
+    sgbm.SADWindowSize = 5;
+    sgbm.numberOfDisparities = 192;
+    sgbm.preFilterCap = 4;
+    sgbm.minDisparity = -64;
+    sgbm.uniquenessRatio = 1;
+    sgbm.speckleWindowSize = 150;
+    sgbm.speckleRange = 2;
+    sgbm.disp12MaxDiff = 10;
+    sgbm.fullDP = false;
+    sgbm.P1 = 600;
+    sgbm.P2 = 2400;
 
-        cv::Ptr<cv::StereoSGBM> sgbm = cv::createStereoSGBM(-64, 192, 15, 600, 2400, 10, 4, 1, 150, 2);
-        sgbm->setDisp12MaxDiff(10);
+    typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image, sensor_msgs::Image> syncPolicy;
 
-        sgbm->compute(greyLeftImage, greyRightImage, disp);
-        cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_8U);
-    }
-    else
-    {
-        printf("No data in any of images!\n");
-        return -1;
-    }
+    message_filters::Synchronizer<syncPolicy> sync(syncPolicy(10), leftImageSub, rightImageSub, depthMapSub);
+    sync.registerCallback(boost::bind(&callback, _1, _2, _3));
 
     ros::spin();
+
+    //should execute after we read all messages
+    double mean = 0;
+    for (size_t i = 0; i < xs.size(); ++i)
+    {
+        mean += xs[i];
+    }
+    mean /= xs.size();
+
+    double sd = 0;
+    for (size_t i = 0; i < xs.size(); ++i)
+    {
+        sd += ((xs[i] - mean) * (xs[i] - mean));
+    }
+    sd = sqrt(sd / xs.size());
+
+    printf("Standard deviation is: %f\n", sd);
 
     return 0;
 }
