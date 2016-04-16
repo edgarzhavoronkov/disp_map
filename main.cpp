@@ -17,7 +17,12 @@
 
 cv::StereoSGBM sgbm;
 
-std::vector<double> xs;
+std::vector<long double> xs;
+
+inline long double sqr(long double x)
+{
+    return x * x;
+}
 
 void callback(const sensor_msgs::ImageConstPtr& left
     , const sensor_msgs::ImageConstPtr& right
@@ -37,11 +42,11 @@ void callback(const sensor_msgs::ImageConstPtr& left
     cv::cvtColor(rightImage, greyRightImage, cv::COLOR_BGR2GRAY);
 
     sgbm(greyLeftImage, greyRightImage, disp);
-    cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_8U);
-    printf("Computed disp_map\n\n");
+    cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_16UC1);
+    printf("Computed disp_map\n");
 
     cv::Mat diff = disp8 - depthImage;
-    printf("Difference is %f\n", cv::sum(diff)[0]);
+    printf("Difference is %f\n\n", cv::sum(diff)[0]);
     xs.push_back(cv::sum(diff)[0]);
 }
 
@@ -75,21 +80,20 @@ int main(int argc, char** argv )
     ros::spin();
 
     //should execute after we read all messages
-    double mean = 0;
+    //theese formulaes are recursive so we can avoid overflow
+    long double mean = 0;
     for (size_t i = 0; i < xs.size(); ++i)
     {
-        mean += xs[i];
+        mean = ((mean * i) + xs[i])/(i + 1);
     }
-    mean /= xs.size();
-
-    double sd = 0;
+    long double sd = 0;
     for (size_t i = 0; i < xs.size(); ++i)
     {
-        sd += ((xs[i] - mean) * (xs[i] - mean));
+        sd = sqrt( ((sqr(sd) * i) + sqr(xs[i] - mean))/(i + 1) );
     }
-    sd = sqrt(sd / xs.size());
 
-    printf("Standard deviation is: %f\n", sd);
+    printf("Mean is: %Lf\n", mean);
+    printf("Standard deviation is: %Lf\n", sd);
 
     return 0;
 }
