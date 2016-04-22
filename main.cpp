@@ -1,6 +1,8 @@
-#include <stdio.h>
+#include <cstdio>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
+#include <iostream>
 
 #include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
@@ -27,6 +29,19 @@ inline long double sqr(long double x)
     return x * x;
 }
 
+inline cv::Mat getMatrix(std::vector<std::vector<double>>& vec)
+{
+    cv::Mat res(vec.size(), vec[0].size(), CV_64FC1);
+    for (size_t i = 0; i < vec.size(); i++)
+    {
+        for (size_t j = 0; j < vec[i].size(); j++)
+        {
+            res.at<double>(i, j) = vec[i][j];
+        }
+    }
+    return res;
+}
+
 void callback(const sensor_msgs::ImageConstPtr& left
     , const sensor_msgs::ImageConstPtr& right
     , const sensor_msgs::ImageConstPtr& depth
@@ -41,7 +56,7 @@ void callback(const sensor_msgs::ImageConstPtr& left
 
     cv::Mat leftImage = cv_bridge::toCvShare(left, sensor_msgs::image_encodings::BGR8)->image;
     cv::Mat rightImage = cv_bridge::toCvShare(right, sensor_msgs::image_encodings::BGR8)->image;
-    cv::Mat depthImage = cv_bridge::toCvShare(depth)->image;
+    cv::Mat depthImage = cv_bridge::toCvShare(depth, sensor_msgs::image_encodings::TYPE_32FC1)->image;
     cv::Mat greyLeftImage, greyRightImage;
     cv::Mat disp, disp8;
 
@@ -52,34 +67,57 @@ void callback(const sensor_msgs::ImageConstPtr& left
 
     //rectification
 
-    std::vector<std::vector<double> > leftCamMat = {
+    std::vector<std::vector<double> > leftCamMatData = {
         {leftCameraInfo->K[0], leftCameraInfo->K[1], leftCameraInfo->K[2]},
         {leftCameraInfo->K[3], leftCameraInfo->K[4], leftCameraInfo->K[5]},
         {leftCameraInfo->K[6], leftCameraInfo->K[7], leftCameraInfo->K[8]}
     };
 
-    std::vector<std::vector<double> > rightCamMat = {
+    std::vector<std::vector<double> > rightCamMatData = {
         {rightCameraInfo->K[0], rightCameraInfo->K[1], rightCameraInfo->K[2]},
         {rightCameraInfo->K[3], rightCameraInfo->K[4], rightCameraInfo->K[5]},
         {rightCameraInfo->K[6], rightCameraInfo->K[7], rightCameraInfo->K[8]}
     };
 
-    std::vector<std::vector<double> > R = {
+    std::vector<std::vector<double> > rData = {
         {leftCameraInfo->R[0], leftCameraInfo->R[1], leftCameraInfo->R[2]},
         {leftCameraInfo->R[3], leftCameraInfo->R[4], leftCameraInfo->R[5]},
         {leftCameraInfo->R[6], leftCameraInfo->R[7], leftCameraInfo->R[8]}
     };
 
-    std::vector<double> leftCamD = leftCameraInfo->D;
-    std::vector<double> rightCamD = rightCameraInfo->D;
-
-    std::vector<double> T = {
-        leftCameraInfo->P[3],
-        leftCameraInfo->P[7],
-        leftCameraInfo->P[11]
+    std::vector<std::vector<double> > leftCamDData = {
+        { leftCameraInfo->D[0] },
+        { leftCameraInfo->D[1] },
+        { leftCameraInfo->D[2] },
+        { leftCameraInfo->D[3] },
+        { leftCameraInfo->D[4] }
+    };
+    std::vector<std::vector<double> > rightCamDData = {
+        { rightCameraInfo->D[0] },
+        { rightCameraInfo->D[1] },
+        { rightCameraInfo->D[2] },
+        { rightCameraInfo->D[3] },
+        { rightCameraInfo->D[4] }
     };
 
-    std::vector<std::vector<double>> Q(4, std::vector<double>(4));
+    std::vector<std::vector<double> > tData = {
+        { leftCameraInfo->P[3] },
+        { leftCameraInfo->P[7] },
+        { leftCameraInfo->P[11] }
+    };
+
+    //std::vector<std::vector<double>> qData(4, std::vector<double>(4, 0));
+
+    cv::Mat leftCamMat = getMatrix(leftCamMatData);
+    cv::Mat rightCamMat = getMatrix(rightCamMatData);
+    cv::Mat leftCamD = getMatrix(leftCamDData);
+    cv::Mat rightCamD = getMatrix(rightCamDData);
+    cv::Mat R = getMatrix(rData);
+    cv::Mat T = getMatrix(tData);
+    cv::Mat R1, R2, P1, P2, Q;
+
+    std::cout << leftCamMat << std::endl;
+    exit(88);
 
     cv::stereoRectify(
         leftCamMat,
@@ -89,23 +127,40 @@ void callback(const sensor_msgs::ImageConstPtr& left
         leftImage.size(),
         R,
         T,
-        cv::noArray(),
-        cv::noArray(),
-        cv::noArray(),
-        cv::noArray(),
-        cv::noArray()
+        R1,
+        R2,
+        P1,
+        P2,
+        Q
     );
 
     //computing disparity
 
     sgbm(greyLeftImage, greyRightImage, disp);
-    cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_16UC1);
+    cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_32FC1);
     printf("Computed disparity map\n");
 
     //computing depth from disparity
 
-    cv::Mat depthMap = cv::Mat::zeros(disp8.size(), CV_16UC1);
-    cv::reprojectImageTo3D(disp8, depthMap, Q);
+    cv::Mat depthMap3D = cv::Mat::zeros(depthImage.size(), CV_32FC1);
+    cv::reprojectImageTo3D(disp8, depthMap3D, Q, CV_32FC1);
+
+    cv::Point2f leftCamPrincipalPoint(leftCameraInfo->K[2], leftCameraInfo->K[5]);
+    cv::Point2f rightCamPrincipalPoint(rightCameraInfo->K[2], rightCameraInfo->K[5]);
+
+    cv::Point2f midPoint = (leftCamPrincipalPoint + rightCamPrincipalPoint) * .5;
+    cv::Point3f midPoint3D(midPoint.x, midPoint.y, 0);
+
+    cv::Mat depthMap = cv::Mat::zeros(depthMap3D.size(), CV_32FC1);
+
+    for (size_t i = 0; i < depthMap.rows; ++i)
+    {
+        for (size_t j = 0; j < depthMap.cols; ++j)
+        {
+            cv::Point3f pixel =  depthMap3D.at<cv::Point3f>(i, j);
+            depthMap.at<float>(i, j) = cv::norm(pixel - midPoint3D);
+        }
+    }
 
     printf("Computed depth map\n");
 
