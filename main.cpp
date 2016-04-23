@@ -57,11 +57,6 @@ void callback(const sensor_msgs::ImageConstPtr& left
     cv::Mat leftImage = cv_bridge::toCvShare(left, sensor_msgs::image_encodings::BGR8)->image;
     cv::Mat rightImage = cv_bridge::toCvShare(right, sensor_msgs::image_encodings::BGR8)->image;
     cv::Mat depthImage = cv_bridge::toCvShare(depth, sensor_msgs::image_encodings::TYPE_32FC1)->image;
-    cv::Mat greyLeftImage, greyRightImage;
-    cv::Mat disp, disp8;
-
-    cv::cvtColor(leftImage, greyLeftImage, cv::COLOR_BGR2GRAY);
-    cv::cvtColor(rightImage, greyRightImage, cv::COLOR_BGR2GRAY);
 
     //TODO: calibarate cameras - assume cameras are calibrated
 
@@ -101,12 +96,10 @@ void callback(const sensor_msgs::ImageConstPtr& left
     };
 
     std::vector<std::vector<double> > tData = {
-        { leftCameraInfo->P[3] },
-        { leftCameraInfo->P[7] },
-        { leftCameraInfo->P[11] }
+        { rightCameraInfo->P[3] },
+        { rightCameraInfo->P[7] },
+        { rightCameraInfo->P[11] }
     };
-
-    //std::vector<std::vector<double>> qData(4, std::vector<double>(4, 0));
 
     cv::Mat leftCamMat = getMatrix(leftCamMatData);
     cv::Mat rightCamMat = getMatrix(rightCamMatData);
@@ -115,9 +108,6 @@ void callback(const sensor_msgs::ImageConstPtr& left
     cv::Mat R = getMatrix(rData);
     cv::Mat T = getMatrix(tData);
     cv::Mat R1, R2, P1, P2, Q;
-
-    std::cout << leftCamMat << std::endl;
-    exit(88);
 
     cv::stereoRectify(
         leftCamMat,
@@ -134,16 +124,87 @@ void callback(const sensor_msgs::ImageConstPtr& left
         Q
     );
 
-    //computing disparity
+    std::cout << "Computed rectification matrices!" << std::endl;
 
+    cv::Mat leftCamMap1, leftCamMap2;
+    cv::initUndistortRectifyMap(
+        leftCamMat,
+        leftCamD,
+        R1,
+        leftCamMat,
+        leftImage.size(),
+        CV_32FC1,
+        leftCamMap1,
+        leftCamMap2
+    );
+
+    std::cout << "Computed rectification map for left camera!" << std::endl;
+
+    cv::Mat rightCamMap1, rightCamMap2;
+    cv::initUndistortRectifyMap(
+        rightCamMat,
+        rightCamD,
+        R2,
+        rightCamMat,
+        rightImage.size(),
+        CV_32FC1,
+        rightCamMap1,
+        rightCamMap2
+    );
+
+    std::cout << "Computed rectification map for right camera!" << std::endl;
+
+    cv::Mat mappedLeftImage, mappedRightImage;
+    cv::remap(
+        leftImage,
+        mappedLeftImage,
+        leftCamMap1,
+        leftCamMap2,
+        cv::INTER_LINEAR
+    );
+
+    std::cout << "Remapped left image!" << std::endl;
+
+    cv::remap(
+        rightImage,
+        mappedRightImage,
+        rightCamMap1,
+        rightCamMap2,
+        cv::INTER_LINEAR
+    );
+
+    std::cout << "Remapped right image!" << std::endl;
+
+    cv::Mat greyLeftImage, greyRightImage;
+    cv::Mat disp;
+
+    cv::cvtColor(mappedLeftImage, greyLeftImage, cv::COLOR_BGR2GRAY);
+    std::cout << "Converted to grey left image!" << std::endl;
+
+    cv::cvtColor(mappedRightImage, greyRightImage, cv::COLOR_BGR2GRAY);
+    std::cout << "Converted to grey right image!" << std::endl;
+
+    //computing disparity
     sgbm(greyLeftImage, greyRightImage, disp);
+    // cv::Mat disp8 = cv::Mat::zeros(disp.size(), CV_32FC1);
+    // for (size_t i = 0; i < disp.rows; ++i)
+    // {
+    //     for (size_t j = 0; j < disp.cols; ++j)
+    //     {
+    //         float val =  disp.at<float>(i, j);
+    //         disp8.at<float>(i, j) = val / 16.0;
+    //     }
+    // }
+    cv::Mat disp8;
     cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_32FC1);
+
     printf("Computed disparity map\n");
 
     //computing depth from disparity
 
     cv::Mat depthMap3D = cv::Mat::zeros(depthImage.size(), CV_32FC1);
     cv::reprojectImageTo3D(disp8, depthMap3D, Q, CV_32FC1);
+
 
     cv::Point2f leftCamPrincipalPoint(leftCameraInfo->K[2], leftCameraInfo->K[5]);
     cv::Point2f rightCamPrincipalPoint(rightCameraInfo->K[2], rightCameraInfo->K[5]);
@@ -165,8 +226,22 @@ void callback(const sensor_msgs::ImageConstPtr& left
     printf("Computed depth map\n");
 
     cv::Mat diff = depthMap - depthImage;
-    printf("Difference is %f\n\n", cv::sum(diff)[0]);
-    xs.push_back(cv::sum(diff)[0]);
+
+    long double sum = 0;
+
+    for (size_t i = 0; i < diff.rows; ++i)
+    {
+        for (size_t j = 0; j < diff.cols; ++j)
+        {
+            if (std::isfinite(diff.at<float>(i, j)))
+            {
+                sum += diff.at<float>(i, j);
+            }
+        }
+    }
+
+    printf("Total difference is %Lf\n\n", sum);
+    xs.push_back(sum);
 }
 
 int main(int argc, char** argv )
