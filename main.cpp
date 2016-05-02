@@ -21,6 +21,9 @@
 #include <opencv2/imgproc/imgproc.hpp>
 
 cv::StereoBM sgbm(cv::StereoBM::BASIC_PRESET, 80,5);
+// cv::StereoSGBM sgbm;
+
+const int MMS_IN_METER = 1000;
 
 cv::Mat leftCamMap1, leftCamMap2;
 cv::Mat rightCamMap1, rightCamMap2;
@@ -50,12 +53,12 @@ inline static void initSGBM()
     sgbm.state->SADWindowSize = 9;
     sgbm.state->numberOfDisparities = 112;
     sgbm.state->preFilterSize = 5;
-    sgbm.state->preFilterCap = 61;
-    sgbm.state->minDisparity = -39;
-    sgbm.state->textureThreshold = 507;
-    sgbm.state->uniquenessRatio = 0;
-    sgbm.state->speckleWindowSize = 0;
-    sgbm.state->speckleRange = 8;
+    sgbm.state->preFilterCap = 31;
+    sgbm.state->minDisparity = 0;
+    sgbm.state->textureThreshold = 10;
+    sgbm.state->uniquenessRatio = 15;
+    sgbm.state->speckleWindowSize = 100;
+    sgbm.state->speckleRange = 32;
     sgbm.state->disp12MaxDiff = 1;
 }
 
@@ -151,8 +154,6 @@ void cameraInfoHandler(const sensor_msgs::ImageConstPtr& left
         std::cout << "Computed rectification matrices!" << std::endl;
     }
 
-
-
     if (leftCamMap1.empty() && leftCamMap2.empty())
     {
         cv::initUndistortRectifyMap(
@@ -223,7 +224,6 @@ void picHandler(const sensor_msgs::ImageConstPtr& left
     std::cout << "Remapped right image!" << std::endl;
 
     cv::Mat greyLeftImage, greyRightImage;
-    cv::Mat disp;
 
     cv::cvtColor(mappedLeftImage, greyLeftImage, cv::COLOR_BGR2GRAY);
     std::cout << "Converted to grey left image!" << std::endl;
@@ -232,39 +232,20 @@ void picHandler(const sensor_msgs::ImageConstPtr& left
     std::cout << "Converted to grey right image!" << std::endl;
 
     //computing disparity
-    sgbm(greyLeftImage, greyRightImage, disp);
+    cv::Mat disp;
+    sgbm(greyLeftImage, greyRightImage, disp, CV_32F);
 
-    cv::Mat disp8;
-    cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_8U);
+    //normalization - not needed. It needs to be performed only for rendering
+
+    // cv::Mat disp8 = cv::Mat::zeros(disp.size(), CV_8U);
+    //cv::normalize(disp, disp8, 0, 255, cv::NORM_MINMAX, CV_8U);
 
     printf("Computed disparity map\n");
 
     //computing depth from disparity
 
-    // cv::Mat_<cv::Point3f> depthMap3D(disp8.rows, disp8.cols);   // Output point cloud
-    // cv::Mat_<float> vec_tmp(4,1);
-
-    // for(int y = 0; y < disp8.rows; ++y)
-    // {
-    //     for(int x = 0; x < disp8.cols; ++x)
-    //     {
-    //         vec_tmp(0) = x;
-    //
-    //         vec_tmp(1) = y;
-    //         vec_tmp(2) = disp8.at<float>(y, x);
-    //         vec_tmp(3) = 1;
-    //         vec_tmp = Q * vec_tmp;
-    //         vec_tmp /= vec_tmp(3);
-    //
-    //         cv::Point3f& point = depthMap3D.at<cv::Point3f>(y, x);
-    //
-    //         point.x = vec_tmp(0);
-    //         point.y = vec_tmp(1);
-    //         point.z = vec_tmp(2);
-    //     }
-    // }
     cv::Mat depthMap3D = cv::Mat::zeros(depthImage.size(), CV_32FC1);;
-    cv::reprojectImageTo3D(disp8, depthMap3D, Q);
+    cv::reprojectImageTo3D(disp, depthMap3D, Q, true);
 
 
     cv::Point2f leftCamPrincipalPoint(leftCameraInfo->K[2], leftCameraInfo->K[5]);
@@ -281,6 +262,7 @@ void picHandler(const sensor_msgs::ImageConstPtr& left
         {
             cv::Point3f pixel =  depthMap3D.at<cv::Point3f>(i, j);
             depthMap.at<float>(i, j) = cv::norm(pixel - midPoint3D);
+            // depthMap.at<float>(i, j) = depthMap3D.at<cv::Point3f>(i, j).z;
         }
     }
 
@@ -288,9 +270,10 @@ void picHandler(const sensor_msgs::ImageConstPtr& left
 
     cv::imshow("left", leftImage);
     cv::imshow("right", rightImage);
-    cv::imshow("disp", disp8);
+    cv::imshow("disp", disp);
     cv::imshow("expected", depthImage);
     cv::imshow("actual", depthMap);
+    cv::imshow("3D", depthMap3D);
     cv::waitKey(30);
 
     cv::Mat diff = depthMap - depthImage;
