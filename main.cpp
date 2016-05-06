@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <vector>
 #include <iostream>
+#include <string>
 
 #include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
@@ -34,6 +35,17 @@ std::vector<long double> xs;
 inline long double sqr(long double x)
 {
     return x * x;
+}
+
+void onMouseMove(int event, int x, int y, int flags, void* userdata)
+{
+    //hope no memory leaks are in here
+    cv::Mat pic = cv::Mat::zeros(250, 250, CV_8UC3);
+    cv::Mat* depthPicPtr = (cv::Mat*)userdata;
+    std :: string text = "depth = " + std :: to_string(depthPicPtr->at<float>(x, y));
+    cv::putText(pic, text, cv::Point(50,50), CV_FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 255), 1, 8, false);
+    cv::imshow("Text", pic);
+    //std :: cout << "x = " << x << " y = " << y  << std :: endl;
 }
 
 inline static void initSGBM()
@@ -268,12 +280,14 @@ void picHandler(const sensor_msgs::ImageConstPtr& left
 
     printf("Computed depth map\n");
 
-    cv::imshow("left", leftImage);
-    cv::imshow("right", rightImage);
-    cv::imshow("disp", disp);
+    // cv::imshow("left", leftImage);
+    // cv::imshow("right", rightImage);
+    // cv::imshow("disp", disp);
     cv::imshow("expected", depthImage);
     cv::imshow("actual", depthMap);
-    cv::imshow("3D", depthMap3D);
+    cv::setMouseCallback("actual", onMouseMove, (void*)&depthMap);
+    cv::setMouseCallback("expected", onMouseMove, (void*)&depthImage);
+
     cv::waitKey(30);
 
     cv::Mat diff = depthMap - depthImage;
